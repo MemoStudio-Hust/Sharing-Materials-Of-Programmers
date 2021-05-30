@@ -1,0 +1,125 @@
+# 基于SPH的流体简单模拟
+
+
+
+## 1. 流体的表现视角
+
+   I.拉格朗日视角
+
+   将流体分割成足够多的质元，将每个质元作为考察对象，认定并考察他们的位置随时间的变化
+
+   
+
+   II.欧拉视角
+
+   不去跟踪每一质元的运动，而去注意不同时刻经过空间给定位置处的流体质元的速度与加速度。
+
+   
+
+## 2. 光滑核函数
+
+​	利用核函数表达物理量的形式：$A(\vec{r}) = \sum_{j}A_{j}\frac{m_{j}}{\rho_{j}}W(\vec{r}-\vec{r_{0}},h)$ 
+
+   A为流体中特定粒子所携带的物理量
+
+   
+
+   光滑核函数的形式
+
+   $W(\vec{r})=\left\{
+   \begin{aligned}
+   kf(\vec{r}) & , & r\leq h, \\
+   0 & , & r\geq h
+   \end{aligned}
+   \right.$
+
+   $k$为某特定常数，通过其规整函数的特性可以求得
+
+   
+
+​	光滑核函数的特性
+
+​	偶函数、规整函数等
+
+​	https://zhuanlan.zhihu.com/p/26520812
+
+
+
+## 3. 各物理量的表述
+
+   密度：$\rho(r_{i}) = \sum_{j}m_{j}W_{Poly6}(\vec{r_{j}} - \vec{r_{i}})$	$W_{Poly6}(\vec{r})=\left\{
+   \begin{aligned}
+   K(h^2-r^2)^3 & , & r\leq h, \\
+   0 & , & r\geq h
+   \end{aligned}
+   \right.$
+
+   压强：$P(r_{i}) = K(\rho - \rho_{0})$ 等，通过理想气体状态方程导出，$K$是一与温度相关的常量，$\rho_{0}$是一个理想的静态密度
+
+   ​			https://zhuanlan.zhihu.com/p/109078336
+
+   压力：$F_{pressure} = -\sum_{j}\frac{m_{j}(p_{j}+p_{i})}{2\rho_{j}}\nabla W_{Spiky}(\vec{r_{i}}-\vec{r_{j})} $    $W_{Spiky}(\vec{r})=\left\{
+   \begin{aligned}
+   K(h-r)^3 & , & r\leq h, \\
+   0 & , & r\geq h
+   \end{aligned}
+   \right. $
+
+   粘性力：$F_{viscosity} = \mu\sum_{j}\frac{(u_{j}-u_{i})}{\rho_{j}}\nabla^2 W_{Spiky}(\vec{r_{i}}-\vec{r_{j})}$	$W_{Spiky}(\vec{r})=\left\{
+   \begin{aligned}
+   K(-\frac{r^3}{2h^3}+\frac{r^2}{h^2}+\frac{h}{2r}-1) & , & r\leq h, \\
+   0 & , & r\geq h
+   \end{aligned}
+   \right. $
+
+   值得注意的是，在对$W_{Spiky}$做二阶梯度的时候，我们不直接采用数学上得出的结果，而是采用一个近似公式
+
+   数学上得出的结果会导致在r趋近于0时使得黏性力趋近于无穷大，导致系统中两个粒子靠的太近时会造成系统崩溃
+
+   $ \nabla^2 W_{Spiky}(\vec{r}) = \frac{45}{\pi h^6}(h-r)$ (3D状况下，2D状况下需要修正系数)
+
+   
+
+## 4. SPH方法在程序中的执行步骤
+
+1. 构建足够数量的粒子，初始化粒子位置
+
+2. 确定每个粒子周围靠近的粒子，并整理出索引
+
+3. 计算每个粒子的密度和压强
+
+4. 通过压强密度等属性计算出每个粒子的受力
+
+5. 通过受力和速度计算出粒子在下一时刻的位置和速度变化
+
+6. 应用粒子的位置变化和速度变化
+
+7. 回到步骤2
+
+
+
+通过以上循环迭代以模拟粒子效果
+
+
+## 5. SPH的缺陷
+   计算的误差和不稳定：随每次迭代的时间间隔增长，计算的误差会变大，同时数值的解可能变得不稳定（粒子会炸）
+		解决的方法：采用隐式积分器（会减缓运算速度但获得更高运算精度）
+				  			 添加位移、速度的一个数值变化的极限（限制最大速度和最大加速度）
+
+性能开销过大：每次搜索周围粒子的时间复杂度是$𝑂(𝑛^2 )$
+		解决的方法：构建网格，将粒子归入到网格内，每次先确定粒子所属的网格再在该网格的周围的网格搜索粒子，而不是比较空间中所有的粒子。
+
+ ## 6. SPH的一些变体或者改进
+ PCISPH
+	https://blog.csdn.net/qq_39300235/article/details/109450609
+
+ PBF
+	https://blog.csdn.net/Knight_Lyh/article/details/56282584
+
+# 参考
+GAMES201:第一讲（拉格朗日视角）的后半截
+比较详细的SPH教程
+https://blog.csdn.net/liuyunduo/article/details/84098884
+关于压强计算的比较详细的介绍
+https://zhuanlan.zhihu.com/p/109078336
+https://zhuanlan.zhihu.com/p/109010492
