@@ -1,0 +1,383 @@
+# 预计算辐射传输
+
+[toc]
+
+## 前置知识
+
+这部分没啥内容，如果了解过的可以直接跳过。
+
+### 一、渲染方程
+
+#### 1. 若干基本概念
+
+**立体角(Solid Angle)**：球面上一小块的面积/半径，类比平面角的弧长/半径。
+
+**微分立体角(Differential Solid Angle)**：$dw=\frac{dA}{r^2}=\frac{r^2sin\theta d\theta d\phi}{r^2}=sin\theta d\theta d\phi$
+
+**能量(Energy)**：光具有能量，单位焦耳
+
+**功率(Power)**：$\Phi = \frac{dQ}{dt}$，单位时间内通过的能量。
+
+一般在图形学中会直接考虑功率。有的时候即使说能量指的也是单位时间的能量（即功率），后文若无特别说明，提到能量一般指的是功率。
+
+#### 2. 辐射度量学
+
+**Power：**$\Phi$，代表总能量
+
+**Radiant Intensity：**$I=\frac{d\Phi}{dw}$，代表一个光柱具有的能量密度
+
+**Radiance：**$L=\frac{dI}{dA_\perp}=\frac{d^2\Phi}{dAdwcos\theta}$，代表一个光线具有的能量密度，其中$A_\perp=Acos\theta$为光柱的面积。
+
+**Irradiance：**$E=\frac{d\Phi}{dA}$，代表一个光锥具有的能量密度。
+
+上述物理量中，我们最关心$L$，这是人眼感知到的光线亮度。
+
+#### 3. 渲染方程
+
+渲染方程，表示给定某一点的材质信息和接收到的光照信息，如何计算该点的出射光线。计算着色点颜色的过程就是求解渲染方程的过程。
+
+某一点x的渲染方程表述如下：
+$$
+L_o(x,w_o)=L_e(x,w_o)+\int_SL_i(x,w_i)f(x,w_i,w_o)max\{cos\theta, 0\} dw_i
+$$
+其中：
+
+* $L_o$：$w_o$方向出射的radiance，即我们从$w_o$方向上看到的亮度。
+* $Le$：该点的自发光。
+* $L_i(x,w_i)$：点$x$接收到的来自$w_i$方向上的$radiance$。
+* $max\{cos\theta, 0\}$：$\theta$为法线与入射方向的夹角，$cos\theta$代表斜射带来的入射光衰减，取$max\{cos\theta, 0\}$表示从背面入射的光线不会被接收到。
+* $f(x,w_i,x_o)$：来自$w_i$的能量有多少比例被反射到$w_o$方向。这一项叫BRDF，翻译过来就是双向反射分布函数，后面还会讨论。
+* $S$：整个球面，但实际的积分域是一个半球面，另个半球面中$max\{cos\theta, 0\}$这一项始终为$0$。
+
+如果将积分域限制到$cos\theta>0$的半球面，然后对渲染方程左右两边同时微分：
+$$
+\begin{align}
+dL_o(x,w_0)&=L_i(x,w_i)f(x,w_i,w_o)cos\theta dw_i \\
+f(x,w_i,w_o)&=\frac{dL_o(x,w_0)}{L_i(x,w_i)cos\theta dw_i}\\
+&=\frac{dL_o(x,w_0)}{dE_i(x,w_i)}
+\end{align}
+$$
+$f=\frac{dL_o}{dE_i}$是BRDF的定义式，表示给定入射方向与反射方向，反射光的能量占入射光能量的比例。
+
+这里有个初学者容易困惑的地方，直觉上BRDF应该定义成$\frac{dL_o}{dL_i}$，但实际却定义为$\frac{dL_o}{dE_i}$。这是因为当一条光线从$w_o$方向打到表面，然后被反射到四面八方，由于能量守恒，所有出射方向的radiance总和应不大于入射的radiance（之所以不是等于是因为有部分能量可能会被表面吸收），所以某一条具体的出射方向的radiance就应该是无穷小，$\frac{dL_o}{dL_i}$恒为0。为了让分式有意义，分母上也应该乘一个无穷小，于是就变成了$\frac{dL_o}{dE_i}$。
+
+在实时渲染中，我们很难直接得到$L_i$，所以我们会把$L_i$分解成$L_iV_i$，这里的$L_i$表示入射方向上的光源，$V_i$是Visibility项，表示入射方向上的可见性（$V_i=1$表示来自该方向光源的光线能打到表面，$V_i=0$表示该方向有遮挡物），于是我们的渲染方程就变成了如下形式：
+$$
+L_o(x,w_o)=L_e(x,w_o)+\int_SL_i(x,w_i)f(x,w_i,w_o)max\{cos\theta, 0\}V(x,w_i) dw_i
+$$
+渲染方程里面有积分，渲染中算积分一般有以下几种方法：
+
+1. 黎曼和：$\int f(x)dx \approx \sum f(x)\Delta x$
+2. 蒙特卡洛积分：$\int f(x)dx \approx \sum \frac{f(x)}{p(x)}$
+3. 近似：$\int f(x)g(x)dx \approx \overline{f(x)}\int g(x)dx=\frac{\int f(x)dx\int g(x)dx}{\int dx}$
+
+
+
+### 二、环境贴图
+
+#### 1. 概述
+
+在传统的Phong模型中，我们把光照拆解成漫反射，高光，环境光三部分。其中环境光被设为常数，这种做法是很不准的。
+
+为了将环境光考虑进来，一种巧妙的做法是，将来自环境的光照信息写进一张贴图（球面贴图或立方体贴图，这两种可以相互转换）中，然后在着色的时候采样环境贴图即可获取环境光照信息。
+
+#### 2. 获取环境贴图
+
+获取环境贴图很简单，比如我们可以直接将天空盒作为环境贴图。如果场景是静态的，我们也可以在预计算阶段从某个视角对整个场景拍一张照，写进环境贴图中。下图（来自LearnOpenGL）展示了天空盒作为环境贴图：
+
+[![2YktsK.png](https://z3.ax1x.com/2021/06/04/2YktsK.png)](https://imgtu.com/i/2YktsK)
+
+#### 3. 使用环境贴图
+
+环境贴图可以认为是一个定义在球面上的函数，该函数接受一个方向作为输入，返回来自该方向的radiance。
+
+以环境光照作为入射radiance，则渲染方程如下（这里只考虑与环境光有关的部分）：
+$$
+L_o(x, w_o)=\int _SL_i(w_i)f(x,w_i,w_o)max\{cos\theta, 0\}V(x,w_i)dw_i
+$$
+这里有一个问题，环境光$L_i(w_i)$只有入射方向这一个自变量，这是因为场景中一定范围内的各个着色点都会采样同一张环境贴图，从而获得一样的环境光照。对于来自无穷远的环境光，这种做法是没问题的，但是对于来自于近处的环境光照就不那么准了（想象一下，人物移动一段距离，看到的太阳位置是不变的，但是路灯的位置肯定会变化）。所以一般使用环境贴图就默认环境光源来自较远的距离。
+
+环境贴图的另一个问题是，$V$项难以计算，毕竟对环境贴图上的每个点都生成一个Shadow Map是不现实的，所以我们一般会忽略$V$项，这就导致了漏光问题。
+
+#### 4. 常见疑问
+
+Q1：既然都是需要静态场景，为什么不用光照烘培？
+
+A1：场景是静态的，但是摄像机和反射物可以移动。直接烘培无法满足从不同角度应该看到不同的反射。
+
+Q2：为什么不能把遮挡信息写进环境贴图？这样就不用单独考虑$V$项了。
+
+A2：远处的遮挡信息会写进环境贴图作为$L(w_i)$的一部分，但是很多在着色点会从同一张环境贴图采样，着色点局部会有一些其它的遮挡信息，这部分还是得记录进$V(w_i)$。
+
+
+
+## 预计算辐射传输（PRT）
+
+PRT是一种预计算的方案，能考虑局部$V$项，但只适用于比较粗糙的材质。其实从原理上高光材质PRT也能做，但是需要大量的显存所以不实用。
+
+PRT能做的事：
+
+1. 计算由于模型自身一部分遮挡另一部分而产生的$V$项。
+
+局限性：
+
+1. 只适用于粗糙材质，光滑材质由于需要爆炸的显存所以不适用。
+2. 只能考虑模型自遮挡而产生的$V$，对于会相对运动的不同模型之间的遮挡无能为力。
+
+### 一、PRT概述
+
+#### 1. 核心思想
+
+渲染方程可以写成如下形式：
+$$
+L_o(x, w_o)=\int _SL_i(w_i)T(x,w_i,w_o)dw_i
+$$
+其中：
+
+* $L_i(w_i)$称为Lighting
+
+* $T(x,w_i,w_o)=f(x,w_i,w_o)max\{cos\theta, 0\}V(x,w_i)$称为Lighting Transfer
+
+光照项来自环境贴图，传输项来自于表面材质以及场景的几何信息。当考虑了$V$项后，传输项会变得非常复杂以至于积分难以计算，但是我们可以考虑将复杂的光照与传输分解成简单光照与传输的线性组合，然后分别计算这些简单的光照项与传输项的积分，最后再将他们加起来。
+
+对于某一个着色点来说，光照项与传输项都是定义在球面上的复杂二元函数，我们可以其分解为基函数的线性组合：
+$$
+f(w)=\sum_{i=1}^nf_iB_i(w)
+$$
+分解是有误差的，n越大误差越小。对于低频的函数（比如粗糙表面的BRDF），我们使用较小的n就可以得到不错的效果。对于高频的函数（比如光滑表面的BRDF），我们需要非常大的n才能得到不错的效果，从而需要非常大的显存。所以这种方法一般只会在低频的情况使用。
+
+这种分解类似傅里叶级数，在傅里叶级数中我们采用三角函数作为基函数，而在渲染中我们会使用一种叫做球谐函数的东西作为基函数。事实上，这种分解也被称为广义傅里叶级数。
+
+#### 2. 球谐函数简介
+
+网上有很多详细介绍球谐函数的文章，这里只讲一些简单的。
+
+我们将球坐标下描述的函数$f(r,\theta,\phi)$代入三维拉普拉斯方程：
+
+$$
+\nabla^2=\frac{\partial^2}{\partial x^2}+\frac{\partial^2}{\partial y^2}+\frac{\partial^2}{\partial z^2}=0
+$$
+
+所得解$R(r)Y(\theta,\phi)$的角度部分$Y(\theta,\phi)$就称为球谐函数。
+
+球谐函数不唯一，有一系列的球谐函数，我们用两个参数$l,m$来表示不同的球谐函数，如下图所示（图片来自Games202课件）：
+
+![](https://z3.ax1x.com/2021/06/04/2YKERg.png)
+
+球谐函数有正交性，即两个不同的球谐函数相乘在球面上的积分为0，两个相同的球谐函数在球面上的积分为1。
+
+#### 3. 使用球谐函数
+
+我们可以在预计算阶段将光照项和传输项都分解为球谐函数，然后在渲染的时候使用：
+$$
+\begin{align}
+L_o(x, w_o)&=\int _SL_i(w_i)T(x,w_i,w_o)dw_i \\
+&=\int_S [\sum_{i=1}^nl_iB_i(w_i)][\sum_{j=1}^nt_j(x,w_o)B_j(w_i)]dw_i \\
+&=\sum_{i=1}^n\sum_{j=1}^nl_it_j(x,w_o)\int_sB_i(w_i)B_j(w_i)dw_i \\
+&=\sum_{i=1}^nl_it_i(x,w_o) \\
+&=\sum_{i=1}^nl_i\sum_{j=1}^mt_{ij}(x)B_j(w_o) \\
+&=
+\begin{bmatrix}l_1&l_2&\cdots&l_n\end{bmatrix}
+\begin{bmatrix}
+t_{11}(x) &t_{12}(x) &\cdots &t_{1m}(x)      \\
+t_{21}(x) &t_{22}(x) &\cdots &t_{2m}(x)      \\
+\vdots &\vdots &\ddots &\vdots \\
+t_{n1}(x) &t_{n2} &\cdots &t_{nm}(x)
+\end{bmatrix}
+\begin{bmatrix}
+B_1(w_o)\\
+B_2(w_o)\\
+\vdots \\
+B_m(w_o)
+\end{bmatrix}
+
+\end{align}
+$$
+
+我们可以把环境光存储为一个向量，把顶点的BRDF存储为一个矩阵，渲染的时候就可以用矩阵乘法代替积分。
+
+由于一般只有对粗糙材质才会使用球谐函数，而粗糙材质从任何一个方向看过去都是一样的，即BRDF取值与出射方向无关，从而渲染方程可以得到简化：
+$$
+\begin{align}
+L_o(x, w_o)&=\int _SL_i(w_i)T(x,w_i)dw_i \\
+&=\sum_{i=1}^nl_it_i(x) \\
+\end{align}
+$$
+于是我们的顶点BRDF可以直接存储为一个向量，而不需一个矩阵。
+
+后文若不特殊说明，所考虑的都是粗糙表面的BRDF。
+
+#### 4. 常见疑问
+
+Q1：为什么不直接预计算$\int L(w_i)T(w_i)dw_i$
+
+A1：反射物可能会发生旋转。展开成球谐的话可以再旋转时快速计算新的球谐系数，而直接预计算$\int L(w_i)T(w_i)dw_i$则不行。
+
+Q2：如何获取$V(w_i)$。
+
+A2：直接往$w_i$方向投射光线（预计算阶段）。
+
+### 二. 预计算阶段
+
+#### 1. 任意函数的球谐展开
+
+将函数展开为球谐函数，意思就是计算一组系数，使得用球谐函数线性组合表示原函数的误差最小。
+
+首先写出球谐函数与原函数的均方误差：
+$$
+E(f_1,f_2...f_n) = \int_S [f(w)-\sum_{i=1}^nf_iB(w)]^2dw
+$$
+对于$E$的极小值点，有$E$对各个$f_i$的偏导数为0：
+$$
+\begin{align}
+0 &= \frac{\partial E}{\partial f_k} \\
+&= \int_S 2[f(w)-\sum_{i=1}^nf_iB_i(w)][-B_k(w)]dw \\
+&=-2\int_Sf(w)B_k(w)dw+2\sum_{i=1}^nf_i\int_SB_i(w)B_k(w)dw \\
+&=-2\int_Sf(w)B_k(w)dw+2f_k \\
+f_k&=\int_Sf(w)B_k(w)dw
+\end{align}
+$$
+$E$对各个$f_i$的偏导数为0仅仅是必要条件而不是充分条件，要验证此时的$E$真的为极小值，还需要对齐再求一阶导数，然后我们就可以发现$E$对$f_k$的二阶偏导数是一个常数2，于是我们可以放心的说这是极小值了。
+
+#### 2. 环境光的球谐展开
+
+我们使用刚刚导出的公式来计算环境光的球谐系数：
+$$
+\begin{align}
+l_i&=\int_SL(w)B_i(w)dw\\
+\end{align}
+$$
+其中的$L$可以通过直接采样环境贴图获得。
+
+#### 3. 传输项的球谐展开
+
+##### 3.1 仅考虑直接光照
+$$
+\begin{align}
+t_i(x)&=\int_ST(x,w)B_i(x,w)dw\\
+&=\int_Sf(x,w)V(x,w)max\{cos\theta,0\}B_i(x,w)dw
+\end{align}
+$$
+
+这里面比较麻烦的是$V$项，我们需要从点x向w方向投射一条射线，并判断该射线与模型的其它部分是否相交。球谐的系数是预计算阶段在CPU中完成的，所以射线检测的代价可以接受。
+
+##### 3.2 考虑Inter-Reflection
+
+Inter-Reflection指的是光线在表面多次弹射的情况。
+
+光线0次弹射的方程应为：
+$$
+\begin{align}
+L_0(x,w_o)&=\int_s L(w_i)f(x,w_i)V(x,w_i)dw_i \\
+&=\int_s L(w_i)T_0(x,w_i)dw_i &(1)
+\end{align}
+$$
+假设$T_k$已知，现推导$T_{k+1}$的表达式：
+$$
+\begin{aligned}
+
+L_{k+1}(x,w_o)&=\int_s f(x,w_i)\{L(w_i)V(x,w_i)+L_k(x'->x)(1-V(x,w_i))\}dw_i \\
+&=\int_s L(w_i)f(x,w_i)V(x,w_i)dw_i+\int_s L_k(x'->x)f(x,w_i)(1-V(x,w_i))dw_i \\
+&=\int_s L(w_i)T_0(x,w_i)dw_i+\int_s L_k(x'->x)f(x,w_i)(1-V(x,w_i))dw_i  &(2) \\
+
+\end{aligned}
+$$
+其中$L_k(x'->x)$表示考虑了光线的$k$次弹射后，由$x'$向点$x$反射的光线。
+
+表达式为：$L_k(x'->x)=L_k(x',-w_i)=\int_s L_k(w_i')T_k(x',w_i')dw_i'$，带入$L_k'(x,w_o)$交换$w_i$和$w_i'$两个变量，得：
+$$
+\begin{aligned}
+
+ \int_s L_k(x'->x)f(x,w_i)(1-V(x,w_i))dw_i &= \int_s L(x'->x)f(x,w_i')(1-V(x,w_i'))dw_i' \\
+ &=\int_s \{\int_s L(w_i)T_k(x',w_i)dw_i\}f(x,w_i')(1-V(x,w_i'))dw_i' \\
+ &=\int_s \int_s L(w_i)T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'dw_i \\
+ &=\int_s L(w_i)\{\int_s T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'\}dw_i &(3)
+
+\end{aligned}
+$$
+
+需要注意的是，因为$x'$是由$w_i'$决定的，所以$T_k(x',w_i)$应该放在内层积分里面。
+
+现在把$L_k'$的表达式代入$(2)$式，得：
+$$
+\begin{aligned}
+
+L_{k+1}(x,w_o)&=\int_s L(w_i)T_0(x,w_i)dw_i+\int_s L_k(x'->x)f(x,w_i)(1-V(x,w_i))dw_i \\
+&=\int_s L(w_i)\{T_0(x,w_i)+\int_s T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'\}dw_i \\
+&=\int_s L(w_i)T_{k+1}(x,w_i)dw_i &(4)\\ 
+
+\end{aligned}
+$$
+
+即：
+$$
+\begin{aligned}
+T_{k+1}(x,w_i) &= T_0(x,w_i)+\int_s T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'  &(5)\\
+\end{aligned} \\
+$$
+
+计算球谐系数：
+$$
+\begin{aligned}
+t_{i,k+1}(x) &= \int_s B_i(w_i)T_{k+1}(x, w_i)dw_i \\
+&= \int_sB_i(w_i)T_0(x,w_i)dw_i+\int_s\int_s B_i(w_i)T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'dw_i \\
+&= t_{i,0}(x)+\int_s\int_s B_i(w_i)T_k(x',w_i)f(x,w_i')(1-V(x,w_i'))dw_i'dw_i \\
+&= t_{i,0}(x)+\int_s\int_s B_i(w_i')T_k(x',w_i')f(x,w_i)(1-V(x,w_i))dw_i'dw_i \\
+&= t_{i,0}(x)+ \int_s\{\int_s B_i(w_i')(\sum t_{j,k}(x')B_j(w_i'))dw_i'\}f(x,w_i)(1-V(x,w_i))dw_i \\
+&= t_{i,0}(x)+ \int_st_{i,k}(x')f(x,w_i)(1-V(x,w_i))dw_i &(6)\\
+\end{aligned} \\
+$$
+
+此处的化简同样有一次交换$w_i$和$w_i'$的操作（第三行到第四行），同时我们将$T_k(x';w_i')$展开成了球谐级数，然后利用球谐函数的正交性消去了一重积分，剩下的利用蒙特卡洛积分即可。需要注意的是，$x'$是关于$w_i$的函数，所以$t_{i,k}(x')$不能提出到积分外面。
+
+写成伪代码：
+
+```c++
+//将T[0]展开为球谐函数
+for(int i = 0; i < n_samples; ++i) {
+    vec2 wi = rand_direction();
+    //计算采样方向和法线方向的夹角
+    float cos_term = Dot(normal(x), wi);
+    if(cos_term > 0){
+        if(visibility(x, wi)){
+            for(int j = 0; j < n_coff; ++j) {
+                //area=1/p，是蒙特卡洛积分的系数
+                coff(x, j) += T(x, wi) * SH_Value(j, wi) * area / n_samples; 
+            }
+        }
+    }
+}
+//迭代计算T[k]
+for(int k = 0; k < k_max; k++){
+    vec2 wi = rand_direction();
+    //计算采样方向和法线方向的夹角
+    float cos_term = Dot(normal(x), wi);
+    if(cos_term > 0){
+        if(intersect(x, wi, &hit_point)){
+            for(int j = 0; j < n_coff; ++j) {
+                coff(x, j, k+1) = coff(x, j, 0) + coff(hit_point, j, k) * brdf(x, wi) * area / n_samples; 
+            }
+        }
+    }
+}
+```
+
+### 三. 渲染阶段
+
+#### 1. 在Shader中使用预计算结果
+
+我们在预计算阶段得到了环境光照的球谐展开，同时得到了每个顶点的传输项的球谐展开，我们可以将环境光球谐系数存储到Uniform，将每个顶点的传输项存储到vertex attribute，然后在Shader里面乘起来即可。
+
+#### 2. 球谐函数的旋转
+
+https://zhuanlan.zhihu.com/p/51267461
+
+##  参考资料
+
+* [GAMES101的15课介绍了渲染方程的内容](https://sites.cs.ucsb.edu/~lingqi/teaching/games101.html)
+* [GAMES202的5，6，7课介绍了环境光和PRT](https://sites.cs.ucsb.edu/~lingqi/teaching/games202.html)
+* [鸡哥的教程，系统讲解PRT](https://zhuanlan.zhihu.com/p/51179426)
+* [chopper的文章，讲了从Laplace方程导出球谐函数的详细过程](https://zhuanlan.zhihu.com/p/153352797)
+* [Ravi的文章，2.2节介绍了一种利用算子推导Inter-Reflection的方法](https://cseweb.ucsd.edu/~ravir/prtsurvey.pdf)
+* [一个球谐函数旋转的算法](https://airguanz.github.io/2018/11/20/SH-PRT.html)
+
